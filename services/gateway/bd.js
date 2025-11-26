@@ -1,5 +1,5 @@
-require('dotenv').config(); 
-const { Pool } = require('pg');
+require('dotenv').config();// створює змінну в процес енв 
+const { Pool } = require('pg'); 
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
