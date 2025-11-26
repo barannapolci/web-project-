@@ -1,49 +1,102 @@
 const express = require('express');
-const fetch = require('node-fetch'); // Потрібен, щоб надсилати запити *від* сервера
-const cors = require('cors'); // Потрібен, щоб дозволити запити з браузера (React)
+const fetch = require('node-fetch');
+const cors = require('cors');
+const db = require('./db'); 
 
-// 2. ІНІЦІАЛІЗАЦІЯ
 const app = express();
-
-app.use(express.json()); // Щоб розуміти JSON-запити від React
-
+app.use(express.json());
 app.use(cors());
 
 const workerServices = [
-    'http://localhost:3001', // Адреса 1-го воркера
-    'http://localhost:3002'  // Адреса 2-го воркера
+    'http://localhost:3001',
+    'http://localhost:3002'
 ];
-
 let currentWorkerIndex = 0;
 
-app.post('/api/calculate', async (req, res) => {
-    
-    const targetWorkerUrl = workerServices[currentWorkerIndex];
-    
 
-    currentWorkerIndex = (currentWorkerIndex + 1) % workerServices.length;
 
-    console.log(`[Gateway]: Отримав запит. Перенаправляю на воркера -> ${targetWorkerUrl}`);
+app.post('/tasks', async (req, res) => {
+   
+    const { n } = req.body;
+    if (n > 100000000) { 
+        return res.status(400).json({ error: "Занадто складна задача! Максимум 100 млн." });
+    }
+
+   
+    const taskId = Date.now().toString(); 
+    const newTask = {
+        id: taskId,
+        status: 'pending', 
+        progress: 0,
+        inputData: req.body
+    };
 
     try {
-
-        const response = await fetch(`${targetWorkerUrl}/calculate`, { // Надсилаємо на адресу воркера
-            method: 'POST',
-            body: JSON.stringify(req.body), // 'req.body' - це те, що прислав React. Ми його передаємо далі.
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        const data = await response.json();
-        
-        res.json(data);
-
-    } catch (error) {
-        console.error(`[Gateway]: Помилка при зверненні до воркера ${targetWorkerUrl}`, error.message);
-        res.status(500).json({ error: 'Сервіс обчислень тимчасово недоступний' });
+        await db.createTask(newTask); 
+        console.log(`[Gateway] Задача ${taskId} створена і записана в БД.`);
+    } catch (err) {
+        return res.status(500).json({ error: "Помилка бази даних" });
     }
+
+ 
+    res.json({ taskId: taskId, status: 'pending' });
+
+   
+    const workerUrl = workerServices[currentWorkerIndex];
+    currentWorkerIndex = (currentWorkerIndex + 1) % workerServices.length;
+
+  
+    const workerPayload = {
+        ...req.body,
+        taskId: taskId, 
+        gatewayUrl: 'http://localhost:3000' 
+    };
+
+    console.log(`[Gateway] Відправляю задачу ${taskId} на воркер ${workerUrl}`);
+
+    fetch(`${workerUrl}/calculate`, {
+        method: 'POST',
+        body: JSON.stringify(workerPayload),
+        headers: { 'Content-Type': 'application/json' }
+    }).catch(err => {
+        console.error(`Помилка запуску воркера: ${err.message}`);
+        db.updateTask(taskId, { status: 'failed' });
+    });
+});
+
+
+app.get('/tasks/:id', async (req, res) => {
+    const task = await db.getTaskById(req.params.id);
+    
+    if (!task) {
+        return res.status(404).json({ error: 'Задачу не знайдено' });
+    }
+    
+    res.json(task); 
+});
+
+
+app.get('/tasks', async (req, res) => {
+    const tasks = await db.getAllTasks();
+    res.json(tasks);
+});
+
+
+app.post('/internal/update-status', async (req, res) => {
+    const { taskId, status, progress, result, workerPort } = req.body;
+    
+    console.log(`[Update] Задача ${taskId}: ${progress}% (${status})`);
+
+    await db.updateTask(taskId, {
+        status,
+        progress,
+        result
+    });
+    
+    res.json({ received: true });
 });
 
 const gatewayPort = 3000;
 app.listen(gatewayPort, () => {
-    console.log(`✅ API Gateway (Диспетчер) запущено на http://localhost:${gatewayPort}`);
+    console.log(`Gateway (Менеджер черги) запущено на http://localhost:${gatewayPort}`);
 });
