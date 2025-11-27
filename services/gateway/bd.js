@@ -17,14 +17,18 @@ async function getAllTasks() {
         return [];
     }
 }
+async function getTasksByUserId(userId) { 
+    const res = await pool.query('SELECT * FROM tasks WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+    return res.rows;
+}
 
 async function createTask(taskObj) {
     const query = `
-        INSERT INTO tasks (id, status, progress, input_data)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO tasks (id, status, progress, input_data, user_id)  -- 1. Додали user_id сюди
+        VALUES ($1, $2, $3, $4, $5)                                    -- 2. Додали $5
         RETURNING *
     `;
-    const values = [taskObj.id, taskObj.status, taskObj.progress, taskObj.inputData];
+    const values = [taskObj.id, taskObj.status, taskObj.progress, taskObj.inputData, taskObj.userId]; 
     
     try {
         const res = await pool.query(query, values);
@@ -76,4 +80,28 @@ async function getTaskById(id) {
     }
 }
 
-module.exports = { getAllTasks, createTask, updateTask, getTaskById };
+async function createUser(username, passwordHash) {
+    const query = `INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username`;
+    try {
+        const res = await pool.query(query, [username, passwordHash]);
+        return res.rows[0];
+    } catch (err) {
+        if (err.code === '23505') throw new Error('Такий юзер вже існує');
+        throw err;
+    }
+}
+
+async function findUserByUsername(username) {
+    const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    return res.rows[0];
+}
+
+module.exports = { 
+    getAllTasks, 
+    createTask, 
+    updateTask, 
+    getTaskById,
+    createUser,
+    findUserByUsername,
+    getTasksByUserId
+};
