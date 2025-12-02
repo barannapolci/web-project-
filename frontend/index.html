@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Розподілені обчислення (Sockets)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+
+    <style>
+        body { background-color: #f8f9fa; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div class="container mt-5">
+        
+        <div id="auth-section" class="card mx-auto shadow" style="max-width: 400px;">
+            <div class="card-body">
+                <h3 class="text-center mb-4" id="auth-title">Вхід</h3>
+                <div id="auth-error" class="alert alert-danger hidden"></div>
+                <form id="auth-form">
+                    <div class="mb-3"><label>Логін</label><input type="text" id="username" class="form-control" required></div>
+                    <div class="mb-3"><label>Пароль</label><input type="password" id="password" class="form-control" required></div>
+                    <button type="submit" class="btn btn-primary w-100" id="auth-btn">Увійти</button>
+                </form>
+                <div class="text-center mt-3"><a href="#" id="toggle-auth">Немає акаунту? Реєстрація</a></div>
+            </div>
+        </div>
+
+        <div id="dashboard-section" class="hidden">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>👋 Привіт, <span id="user-display"></span> <span class="badge bg-success fs-6">Live Socket</span></h2>
+                <button class="btn btn-outline-danger" onclick="logout()">Вийти</button>
+            </div>
+
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card shadow p-3 mb-4">
+                        <h4>🚀 Нова задача</h4>
+                        <form id="task-form">
+                            <div class="mb-2"><label>Функція</label><input type="text" id="funcStr" class="form-control" value="x*x" required></div>
+                            <div class="row mb-2">
+                                <div class="col"><label>Від (a)</label><input type="number" id="a" class="form-control" value="0" required></div>
+                                <div class="col"><label>До (b)</label><input type="number" id="b" class="form-control" value="10" required></div>
+                            </div>
+                            <div class="mb-3"><label>Кроків (N)</label><input type="number" id="n" class="form-control" value="1000000" required></div>
+                            <button type="submit" class="btn btn-success w-100">Запустити</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="col-md-8">
+                    <div class="card shadow p-3">
+                        <h4>📊 Історія (Live Updates)</h4>
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead><tr><th>ID</th><th>Статус</th><th>Прогрес</th><th>Результат</th></tr></thead>
+                                <tbody id="tasks-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000';
+        let isRegisterMode = false;
+        let socket = null; // Змінна для сокета
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('token');
+            if (token) showDashboard(localStorage.getItem('username'));
+            else showAuth();
+        });
+
+        document.getElementById('toggle-auth').addEventListener('click', (e) => {
+            e.preventDefault(); isRegisterMode = !isRegisterMode;
+            document.getElementById('auth-title').innerText = isRegisterMode ? 'Реєстрація' : 'Вхід';
+            document.getElementById('auth-btn').innerText = isRegisterMode ? 'Зареєструватися' : 'Увійти';
+        });
+
+        document.getElementById('auth-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            try {
+                const res = await fetch(`${API_URL}/auth/${isRegisterMode ? 'register' : 'login'}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+
+                if (isRegisterMode) {
+                    alert('Успішно! Увійдіть.'); isRegisterMode = false; document.getElementById('toggle-auth').click();
+                } else {
+                    localStorage.setItem('token', data.token); localStorage.setItem('username', data.username);
+                    showDashboard(data.username);
+                }
+            } catch (err) {
+                document.getElementById('auth-error').innerText = err.message;
+                document.getElementById('auth-error').classList.remove('hidden');
+            }
+        });
+
+        function logout() {
+            localStorage.removeItem('token'); showAuth();
+            if (socket) socket.disconnect(); // Відключаємо сокет при виході
+        }
+
+        function showAuth() {
+            document.getElementById('auth-section').classList.remove('hidden');
+            document.getElementById('dashboard-section').classList.add('hidden');
+        }
+
+        function showDashboard(username) {
+            document.getElementById('auth-section').classList.add('hidden');
+            document.getElementById('dashboard-section').classList.remove('hidden');
+            document.getElementById('user-display').innerText = username;
+            
+            loadTasks(); 
+
+            initSocket();
+        }
+
+        function initSocket() {
+            socket = io('http://localhost:3000');
+
+            socket.on('connect', () => {
+                console.log('🟢 Підключено до сокета!');
+            });
+
+            socket.on('task_update', (data) => {
+                console.log('Оновлення:', data);
+                updateTaskInTable(data);
+            });
+        }
+
+        function updateTaskInTable(data) {
+            const row = document.getElementById(`task-${data.taskId}`);
+            if (row) {
+                const badge = row.querySelector('.badge');
+                badge.innerText = data.status;
+                badge.className = `badge ${data.status === 'completed' ? 'bg-success' : 'bg-primary'}`;
+
+                const progressBar = row.querySelector('.progress-bar');
+                progressBar.style.width = `${data.progress}%`;
+                progressBar.innerText = `${data.progress}%`;
+
+                if (data.result) {
+                    row.querySelector('.task-result').innerText = Number(data.result).toFixed(4);
+                }
+            } else {
+                
+                loadTasks(); 
+            }
+        }
+
+        document.getElementById('task-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const token = localStorage.getItem('token');
+            const payload = {
+                funcStr: document.getElementById('funcStr').value,
+                a: Number(document.getElementById('a').value),
+                b: Number(document.getElementById('b').value),
+                n: Number(document.getElementById('n').value)
+            };
+
+            try {
+                const res = await fetch(`${API_URL}/tasks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (socket) socket.emit('join_task', data.taskId);
+                
+                loadTasks();
+
+            } catch (err) { alert(err.message); }
+        });
+
+        async function loadTasks() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await fetch(`${API_URL}/tasks`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const tasks = await res.json();
+            
+            const tbody = document.getElementById('tasks-table-body');
+            tbody.innerHTML = ''; 
+
+            tasks.forEach(task => {
+                if (task.status !== 'completed' && socket) {
+                    socket.emit('join_task', task.id);
+                }
+
+                let badgeClass = task.status === 'completed' ? 'bg-success' : task.status === 'failed' ? 'bg-danger' : 'bg-primary';
+                
+                const row = `
+                    <tr id="task-${task.id}">
+                        <td><small>${task.id}</small></td>
+                        <td><span class="badge ${badgeClass}">${task.status}</span></td>
+                        <td style="width: 30%">
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${task.progress}%">${task.progress}%</div>
+                            </div>
+                        </td>
+                        <td class="task-result">${task.result ? Number(task.result).toFixed(4) : '-'}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+    </script>
+</body>
+</html>
