@@ -69,16 +69,35 @@ app.post('/auth/login', async (req, res) => {
 
 app.post('/tasks', authenticateToken, async (req, res) => {
     const { n } = req.body;
-    if (n > 100000000) return res.status(400).json({ error: "Забагато" });
+    if (n > 100000000) {
+        return res.status(400).json({ error: "Занадто складна задача! Максимум 100 млн." });
+    }
+
+    try {
+        const userTasks = await db.getTasksByUserId(req.user.id);
+        if (userTasks.length >= 50) { 
+            return res.status(400).json({ error: "Ліміт задач (50) вичерпано. Видаліть старі." });
+        }
+    } catch (err) {
+        return res.status(500).json({ error: "Помилка перевірки ліміту" });
+    }
 
     const taskId = Date.now().toString();
     const newTask = {
-        id: taskId, status: 'pending', progress: 0, inputData: req.body, userId: req.user.id
+        id: taskId,
+        status: 'pending',
+        progress: 0,
+        inputData: req.body,
+        userId: req.user.id
     };
 
-    try { await db.createTask(newTask); } catch (e) { return res.status(500).json({ error: "DB Error" }); }
+    try {
+        await db.createTask(newTask);
+    } catch (err) {
+        return res.status(500).json({ error: "Помилка запису в БД" });
+    }
 
-    res.json({ taskId, status: 'pending' }); 
+    res.json({ taskId: taskId, status: 'pending' });
 
     const workerUrl = workerServices[currentWorkerIndex];
     currentWorkerIndex = (currentWorkerIndex + 1) % workerServices.length;
