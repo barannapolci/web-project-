@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Розподілені обчислення (Sockets)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
-
     <style>
         body { background-color: #f8f9fa; }
         .hidden { display: none !important; }
@@ -32,7 +30,7 @@
 
         <div id="dashboard-section" class="hidden">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2>👋 Привіт, <span id="user-display"></span> <span class="badge bg-success fs-6">Live Socket</span></h2>
+                <h2>👋 Привіт, <span id="user-display"></span></h2>
                 <button class="btn btn-outline-danger" onclick="logout()">Вийти</button>
             </div>
 
@@ -54,10 +52,10 @@
 
                 <div class="col-md-8">
                     <div class="card shadow p-3">
-                        <h4>📊 Історія (Live Updates)</h4>
+                        <h4>📊 Історія</h4>
                         <div class="table-responsive">
                             <table class="table table-hover">
-                                <thead><tr><th>ID</th><th>Статус</th><th>Прогрес</th><th>Результат</th></tr></thead>
+                                <thead><tr><th>ID</th><th>Статус</th><th>Прогрес</th><th>Результат</th><th>Дії</th></tr></thead>
                                 <tbody id="tasks-table-body"></tbody>
                             </table>
                         </div>
@@ -70,7 +68,7 @@
     <script>
         const API_URL = 'http://localhost:3000';
         let isRegisterMode = false;
-        let socket = null; // Змінна для сокета
+        let socket = null;
 
         document.addEventListener('DOMContentLoaded', () => {
             const token = localStorage.getItem('token');
@@ -78,6 +76,7 @@
             else showAuth();
         });
 
+        // --- AUTH ---
         document.getElementById('toggle-auth').addEventListener('click', (e) => {
             e.preventDefault(); isRegisterMode = !isRegisterMode;
             document.getElementById('auth-title').innerText = isRegisterMode ? 'Реєстрація' : 'Вхід';
@@ -109,7 +108,7 @@
 
         function logout() {
             localStorage.removeItem('token'); showAuth();
-            if (socket) socket.disconnect(); // Відключаємо сокет при виході
+            if (socket) socket.disconnect();
         }
 
         function showAuth() {
@@ -121,45 +120,19 @@
             document.getElementById('auth-section').classList.add('hidden');
             document.getElementById('dashboard-section').classList.remove('hidden');
             document.getElementById('user-display').innerText = username;
-            
-            loadTasks(); 
-
+            loadTasks();
             initSocket();
         }
 
+        // --- SOCKETS ---
         function initSocket() {
             socket = io('http://localhost:3000');
-
-            socket.on('connect', () => {
-                console.log('🟢 Підключено до сокета!');
-            });
-
             socket.on('task_update', (data) => {
-                console.log('Оновлення:', data);
                 updateTaskInTable(data);
             });
         }
 
-        function updateTaskInTable(data) {
-            const row = document.getElementById(`task-${data.taskId}`);
-            if (row) {
-                const badge = row.querySelector('.badge');
-                badge.innerText = data.status;
-                badge.className = `badge ${data.status === 'completed' ? 'bg-success' : 'bg-primary'}`;
-
-                const progressBar = row.querySelector('.progress-bar');
-                progressBar.style.width = `${data.progress}%`;
-                progressBar.innerText = `${data.progress}%`;
-
-                if (data.result) {
-                    row.querySelector('.task-result').innerText = Number(data.result).toFixed(4);
-                }
-            } else {
-                
-                loadTasks(); 
-            }
-        }
-
+        // --- TASKS ---
         document.getElementById('task-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const token = localStorage.getItem('token');
@@ -177,13 +150,21 @@
                     body: JSON.stringify(payload)
                 });
                 const data = await res.json();
-                
                 if (socket) socket.emit('join_task', data.taskId);
-                
                 loadTasks();
-
             } catch (err) { alert(err.message); }
         });
+
+        async function cancelTask(taskId) {
+            const token = localStorage.getItem('token');
+            try {
+                await fetch(`${API_URL}/tasks/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ taskId })
+                });
+            } catch (err) { alert(err.message); }
+        }
 
         async function loadTasks() {
             const token = localStorage.getItem('token');
@@ -195,26 +176,60 @@
             tbody.innerHTML = ''; 
 
             tasks.forEach(task => {
-                if (task.status !== 'completed' && socket) {
+                if (task.status !== 'completed' && task.status !== 'cancelled' && socket) {
                     socket.emit('join_task', task.id);
                 }
-
-                let badgeClass = task.status === 'completed' ? 'bg-success' : task.status === 'failed' ? 'bg-danger' : 'bg-primary';
-                
-                const row = `
-                    <tr id="task-${task.id}">
-                        <td><small>${task.id}</small></td>
-                        <td><span class="badge ${badgeClass}">${task.status}</span></td>
-                        <td style="width: 30%">
-                            <div class="progress" style="height: 20px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${task.progress}%">${task.progress}%</div>
-                            </div>
-                        </td>
-                        <td class="task-result">${task.result ? Number(task.result).toFixed(4) : '-'}</td>
-                    </tr>
-                `;
-                tbody.innerHTML += row;
+                addTaskRow(task, tbody);
             });
+        }
+
+        function addTaskRow(task, tbody) {
+            let badgeClass = 'bg-secondary';
+            if (task.status === 'completed') badgeClass = 'bg-success';
+            if (task.status === 'processing') badgeClass = 'bg-primary';
+            if (task.status === 'failed') badgeClass = 'bg-danger';
+            if (task.status === 'cancelled') badgeClass = 'bg-warning text-dark';
+
+            const cancelButton = (task.status === 'pending' || task.status === 'processing') 
+                ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelTask('${task.id}')">Stop</button>` 
+                : '';
+
+            const row = `
+                <tr id="task-${task.id}">
+                    <td><small>${task.id}</small></td>
+                    <td><span class="badge ${badgeClass}">${task.status}</span></td>
+                    <td style="width: 30%">
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${task.progress}%">${task.progress}%</div>
+                        </div>
+                    </td>
+                    <td class="task-result">${task.result ? Number(task.result).toFixed(4) : '-'}</td>
+                    <td class="task-actions">${cancelButton}</td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
+        }
+
+        function updateTaskInTable(data) {
+            const row = document.getElementById(`task-${data.taskId}`);
+            if (!row) { loadTasks(); return; }
+
+            const badge = row.querySelector('.badge');
+            badge.innerText = data.status;
+            
+            if (data.status === 'completed') badge.className = 'badge bg-success';
+            if (data.status === 'cancelled') badge.className = 'badge bg-warning text-dark';
+            if (data.status === 'failed') badge.className = 'badge bg-danger';
+
+            const progressBar = row.querySelector('.progress-bar');
+            progressBar.style.width = `${data.progress}%`;
+            progressBar.innerText = `${data.progress}%`;
+
+            if (data.result) row.querySelector('.task-result').innerText = Number(data.result).toFixed(4);
+            
+            if (data.status === 'completed' || data.status === 'cancelled' || data.status === 'failed') {
+                row.querySelector('.task-actions').innerHTML = '';
+            }
         }
     </script>
 </body>
