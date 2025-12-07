@@ -124,7 +124,6 @@
             initSocket();
         }
 
-        // --- SOCKETS ---
         function initSocket() {
             socket = io('http://localhost:3000');
             socket.on('task_update', (data) => {
@@ -132,7 +131,6 @@
             });
         }
 
-        // --- TASKS ---
         document.getElementById('task-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const token = localStorage.getItem('token');

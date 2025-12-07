@@ -1,6 +1,5 @@
 const express = require('express');
-const fetch = require('node-fetch');
-const cors = require('cors');
+const cors = require('cors'); 
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const http = require('http'); 
@@ -8,14 +7,12 @@ const { Server } = require('socket.io');
 const db = require('./db');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '5kb' }));
 app.use(cors());
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
-const workerServices = ['http://localhost:3001', 'http://localhost:3002'];
-let currentWorkerIndex = 0;
 
 io.on('connection', (socket) => {
     socket.on('join_task', (taskId) => { socket.join(taskId); });
@@ -54,27 +51,27 @@ app.post('/tasks', authenticateToken, async (req, res) => {
     const { n } = req.body;
     if (n > 100000000) return res.status(400).json({ error: "N too big" });
 
-    const userTasks = await db.getTasksByUserId(req.user.id);
-    if (userTasks.length >= 50) return res.status(400).json({ error: "Task limit reached" });
+    try {
+        const userTasks = await db.getTasksByUserId(req.user.id);
+        if (userTasks.length >= 50) return res.status(400).json({ error: "Limit reached" });
+    } catch (err) { return res.status(500).json({ error: "DB Error" }); }
 
     const taskId = Date.now().toString();
-    const newTask = { id: taskId, status: 'pending', progress: 0, inputData: req.body, userId: req.user.id };
+    const newTask = {
+        id: taskId, 
+        status: 'pending', 
+        progress: 0, 
+        inputData: req.body, 
+        userId: req.user.id 
+    };
 
-    try { await db.createTask(newTask); } catch (e) { return res.status(500).json({ error: "DB Error" }); }
+    try { 
+        await db.createTask(newTask); 
+    } catch (e) { return res.status(500).json({ error: "DB Error" }); }
 
     res.json({ taskId, status: 'pending' });
 
-    const workerUrl = workerServices[currentWorkerIndex];
-    currentWorkerIndex = (currentWorkerIndex + 1) % workerServices.length;
-    const workerPayload = { ...req.body, taskId, gatewayUrl: 'http://localhost:3000' };
 
-    fetch(`${workerUrl}/calculate`, {
-        method: 'POST', body: JSON.stringify(workerPayload), headers: { 'Content-Type': 'application/json' }
-    }).catch(err => {
-        console.error('Worker failed:', err);
-        db.updateTask(taskId, { status: 'failed' });
-        io.to(taskId).emit('task_update', { taskId, status: 'failed', progress: 0 });
-    });
 });
 
 app.get('/tasks', authenticateToken, async (req, res) => {
@@ -89,12 +86,13 @@ app.post('/tasks/cancel', authenticateToken, async (req, res) => {
     res.json({ message: 'Cancelled' });
 });
 
+
 app.post('/internal/update-status', async (req, res) => {
     const { taskId, status, progress, result, workerPort } = req.body;
 
     const task = await db.getTaskById(taskId);
     if (task && task.status === 'cancelled') {
-        return res.json({ stop: true }); 
+        return res.json({ stop: true });
     }
 
     if (workerPort) console.log(`[Update :${workerPort}] Task ${taskId}: ${progress}%`);
@@ -106,5 +104,5 @@ app.post('/internal/update-status', async (req, res) => {
 
 const gatewayPort = 3000;
 server.listen(gatewayPort, () => {
-    console.log(` Gateway running on http://localhost:${gatewayPort}`);
+    console.log(`Gateway (Passive Mode) running on http://localhost:${gatewayPort}`);
 });
